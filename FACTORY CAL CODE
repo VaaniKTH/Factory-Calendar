@@ -1,0 +1,450 @@
+TYPE-POOLS: SBIWM, SBIWA, RSARC.
+TABLES: TBDLST.
+tables: THOL,
+        THOLU,
+        THOLT,
+        TFACD,
+        TFACS,
+        TFAIN,
+        THOC,
+        THOCD,
+        THOCI,
+        THOCS,
+        TFACT,
+        TFAIT,
+        THOCT.
+
+* Includes
+INCLUDE RSIMF02.                       " type definitions
+INCLUDE RSIMF01.                       " global data and subroutines
+
+*----------------------------------------------------------------------*
+*   Data definitions                                                   *
+*----------------------------------------------------------------------*
+
+* Local data declarations
+DATA: L_SOURCE TYPE RS_SOURCE.
+DATA: L_UPDATE TYPE RS_UPDATE.
+DATA: L_T_LANGU TYPE SBIWM_T_LANGU.
+DATA: L_S_LANGU TYPE SBIWM_S_LANGU.
+
+
+*-------------------------------------------------------------------*
+*   Select-Screen                                                   *
+*-------------------------------------------------------------------*
+
+SELECTION-SCREEN BEGIN OF BLOCK SOURCE WITH FRAME TITLE TEXT-003.
+SELECTION-SCREEN BEGIN OF LINE.
+SELECTION-SCREEN COMMENT 01(10) TEXT-010 FOR FIELD LOGSYS.
+*  SL30032006 - start of change
+*PARAMETERS:  logsys  TYPE rsa_logsys MODIF ID p01.
+PARAMETERS:  logsys  TYPE rsa_logsys.
+*  SL30032006 - end of change
+PARAMETERS: LOGSYSNM LIKE TBDLST-STEXT MODIF ID P02.
+SELECTION-SCREEN END OF LINE.
+SELECTION-SCREEN END OF BLOCK SOURCE.
+
+SELECTION-SCREEN BEGIN OF BLOCK SELEC WITH FRAME TITLE TEXT-XXX.
+SELECT-OPTIONS FACDID FOR TFACD-IDENT.
+SELECTION-SCREEN  END OF BLOCK SELEC.
+
+
+SELECTION-SCREEN BEGIN OF BLOCK CONTROL WITH FRAME TITLE TEXT-004.
+SELECTION-SCREEN BEGIN OF LINE.
+*PARAMETERS:  analyze RADIOBUTTON GROUP rcon.
+PARAMETERS: ANALYZE LIKE RSIMPORTMODES-MODE_SIMULATE
+                    RADIOBUTTON GROUP RCON.
+SELECTION-SCREEN COMMENT 03(25) TEXT-009 FOR FIELD ANALYZE.
+SELECTION-SCREEN END OF LINE.
+SELECTION-SCREEN BEGIN OF LINE.
+*PARAMETERS:  update RADIOBUTTON GROUP rcon.
+PARAMETERS: UPDATE  LIKE RSIMPORTMODES-MODE_UPDATE
+                    RADIOBUTTON GROUP RCON.
+SELECTION-SCREEN COMMENT 03(25) TEXT-008 FOR FIELD UPDATE.
+SELECTION-SCREEN END OF LINE.
+SELECTION-SCREEN BEGIN OF LINE.
+*PARAMETERS:  synch RADIOBUTTON GROUP rcon.
+PARAMETERS: SYNCH   LIKE RSIMPORTMODES-MODE_REPLACE
+                    RADIOBUTTON GROUP RCON.
+SELECTION-SCREEN COMMENT 03(25) TEXT-011 FOR FIELD SYNCH.
+SELECTION-SCREEN END OF LINE.
+SELECTION-SCREEN END OF BLOCK CONTROL.
+
+
+* Value help for available logical systems
+*AT SELECTION-SCREEN ON VALUE-REQUEST FOR LOGSYS.
+*  PERFORM LOGSYS_F4 CHANGING LOGSYS.
+
+AT SELECTION-SCREEN OUTPUT.
+* get Text for logsys
+  SELECT SINGLE * FROM TBDLST
+         WHERE LOGSYS = LOGSYS
+           AND LANGU  = SY-LANGU.
+  IF SY-SUBRC EQ 0.
+    LOGSYSNM = TBDLST-STEXT.
+  ENDIF.
+* switch off input for parameter LOGSYS
+  LOOP AT SCREEN.
+    IF SCREEN-GROUP1 = 'P01'.
+      SCREEN-INPUT = 0.
+      MODIFY SCREEN.
+    ENDIF.
+    IF SCREEN-GROUP1 = 'P02'.
+      SCREEN-INPUT = 0.
+      MODIFY SCREEN.
+    ENDIF.
+  ENDLOOP.
+* SET CURSOR FIELD 'TYPE-LOW'.
+  SET CURSOR FIELD 'CURRENCY'.
+
+*&---------------------------------------------------------------------*
+*&   Event AT SELECTION-SCREEN
+*&---------------------------------------------------------------------*
+AT SELECTION-SCREEN.
+* local data definitions
+*  DATA: L_VALUE1(128),
+*        L_VALUE2(128),
+*        L_VALUE3(128).
+*  DATA: L_ERROR.
+*
+*  CLEAR: L_VALUE1(128),
+*         L_VALUE2(128),
+*         L_VALUE3(128),
+*         L_ERROR.
+
+  IF UPDATE = 'X' and FACTCALE = 'X'.
+    message ID 'RSAR' TYPE 'E' NUMBER '889'.
+  endif.
+*----------------------------------------------------------------------*
+*  Start of program                                                    *
+*----------------------------------------------------------------------*
+START-OF-SELECTION.
+
+END-OF-SELECTION.
+
+* get input - parameters from selection screen
+  CLEAR L_SOURCE.
+  CLEAR L_UPDATE.
+  MOVE LOGSYS TO L_SOURCE.
+
+* get language settings
+  CALL FUNCTION 'RSA_PROFILE_LANGUAGE_GET'
+    IMPORTING
+      E_T_LANGU     = L_T_LANGU
+    EXCEPTIONS
+      ERROR_BY_READ = 1
+      OTHERS        = 2.
+
+* analyse current modus
+  IF ANALYZE = 'X'.
+* test only
+    L_UPDATE = 'T'.
+  ELSEIF UPDATE = 'X'.
+* updates
+   L_UPDATE = 'U'.
+  ELSE.
+* new setup
+    L_UPDATE = 'N'.
+  ENDIF.
+
+* ME add authoriy check
+  IF     l_update = 'U' OR l_update = 'N'.
+    AUTHORITY-CHECK OBJECT 'ZG_GLOBSET'
+             ID 'PROGRAM' FIELD 'ZG_RSIMPCUST'
+             ID 'ACTVT' FIELD '16'.
+
+    IF sy-subrc NE 0.
+      MESSAGE e002(zg_edwh).
+*   No authorization to import Factory calendars
+
+    ENDIF.
+  ENDIF.
+
+* global table for action trace ( defined in include rsimf01 )
+REFRESH G_T_ANALYSE.
+
+  PERFORM GET_FACTCALE_TABLES USING L_T_LANGU L_UPDATE .
+
+* write action trace stored in global table g_t_analyse
+* WRITE: / 'Tabelle' , 20 'Aktion', 40 'Anz. Sätze', 60 'R-Code'.
+  WRITE: / TEXT-020, 20 TEXT-021, 40 TEXT-022, 60 TEXT-023.
+
+  SORT G_T_ANALYSE BY TABNAME ACTION.
+  WRITE: / SY-ULINE.
+  LOOP AT G_T_ANALYSE INTO G_S_ANALYSE.
+    WRITE: / G_S_ANALYSE-TABNAME,
+            20 G_S_ANALYSE-ACTION,
+            40 G_S_ANALYSE-RECORDS,
+            60 G_S_ANALYSE-RCODE.
+    AT END OF TABNAME.
+*      WRITE: sy-uline.
+    ENDAT.
+
+  ENDLOOP.
+
+*&---------------------------------------------------------------------*
+*&      Form  GET_FACTCALE_TABLES
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_T_LANGU  text                                              *
+*      -->P_UPDATE  text                                               *
+*      -->P_SOURCE  text                                               *
+*----------------------------------------------------------------------*
+FORM GET_FACTCALE_TABLES USING   P_T_LANGU TYPE SBIWM_T_LANGU
+                                 P_UPDATE  TYPE RS_UPDATE.
+
+  DATA: L_T_TCALS  TYPE RS_T_TCALS,
+       L_S_TCALS  TYPE RS_S_TCALS,
+        L_T_THOL   TYPE RS_T_THOL,
+        L_S_THOL   TYPE RS_S_THOL,
+        L_T_THOLU  TYPE RS_T_THOLU,
+        L_S_THOLU  TYPE RS_S_THOLU,
+        L_T_THOLT  TYPE RS_T_THOLT,
+        L_S_THOLT  TYPE RS_S_THOLT,
+        L_T_TFACD  TYPE RS_T_TFACD,
+        L_S_TFACD  TYPE RS_S_TFACD,
+        L_T_TFACS  TYPE RS_T_TFACS,
+        L_S_TFACS  TYPE RS_S_TFACS,
+        L_T_TFAIN  TYPE RS_T_TFAIN,
+        L_S_TFAIN  TYPE RS_S_TFAIN,
+        L_T_THOC   TYPE RS_T_THOC,
+        L_S_THOC   TYPE RS_S_THOC,
+        L_T_THOCD  TYPE RS_T_THOCD,
+        L_S_THOCD  TYPE RS_S_THOCD,
+        L_T_THOCI  TYPE RS_T_THOCI,
+        L_S_THOCI  TYPE RS_S_THOCI,
+        L_T_THOCS  TYPE RS_T_THOCS,
+        L_S_THOCS  TYPE RS_S_THOCS,
+        L_T_TFACT  TYPE RS_T_TFACT,
+        L_S_TFACT  TYPE RS_S_TFACT,
+        L_T_TFAIT  TYPE RS_T_TFAIT,
+        L_S_TFAIT  TYPE RS_S_TFAIT,
+        L_T_THOCT  TYPE RS_T_THOCT,
+        L_S_THOCT  TYPE RS_S_THOCT.
+
+  DATA: L_T_TCALS_DDIC  TYPE RS_T_TCALS_DDIC,
+        L_S_TCALS_DDIC  TYPE RS_S_TCALS_DDIC,
+        L_T_THOL_DDIC   TYPE RS_T_THOL_DDIC,
+        L_S_THOL_DDIC   TYPE RS_S_THOL_DDIC,
+        L_T_THOLU_DDIC  TYPE RS_T_THOLU_DDIC,
+        L_S_THOLU_DDIC  TYPE RS_S_THOLU_DDIC,
+        L_T_THOLT_DDIC  TYPE RS_T_THOLT_DDIC,
+        L_S_THOLT_DDIC  TYPE RS_S_THOLT_DDIC,
+        L_T_TFACD_DDIC  TYPE RS_T_TFACD_DDIC,
+        L_S_TFACD_DDIC  TYPE RS_S_TFACD_DDIC,
+        L_T_TFACS_DDIC  TYPE RS_T_TFACS_DDIC,
+        L_S_TFACS_DDIC  TYPE RS_S_TFACS_DDIC,
+        L_T_TFAIN_DDIC  TYPE RS_T_TFAIN_DDIC,
+        L_S_TFAIN_DDIC  TYPE RS_S_TFAIN_DDIC,
+        L_T_THOC_DDIC   TYPE RS_T_THOC_DDIC,
+        L_S_THOC_DDIC   TYPE RS_S_THOC_DDIC,
+        L_T_THOCD_DDIC  TYPE RS_T_THOCD_DDIC,
+        L_S_THOCD_DDIC  TYPE RS_S_THOCD_DDIC,
+        L_T_THOCI_DDIC  TYPE RS_T_THOCI_DDIC,
+        L_S_THOCI_DDIC  TYPE RS_S_THOCI_DDIC,
+        L_T_THOCS_DDIC  TYPE RS_T_THOCS_DDIC,
+        L_S_THOCS_DDIC  TYPE RS_S_THOCS_DDIC,
+        L_T_TFACT_DDIC  TYPE RS_T_TFACT_DDIC,
+        L_S_TFACT_DDIC  TYPE RS_S_TFACT_DDIC,
+        L_T_TFAIT_DDIC  TYPE RS_T_TFAIT_DDIC,
+        L_S_TFAIT_DDIC  TYPE RS_S_TFAIT_DDIC,
+        L_T_THOCT_DDIC  TYPE RS_T_THOCT_DDIC,
+        L_S_THOCT_DDIC  TYPE RS_S_THOCT_DDIC.
+
+  REFRESH: L_T_TCALS, L_T_THOL, L_T_THOLU, L_T_THOLT, L_T_TFACD,
+           L_T_TFACS, L_T_TFAIN, L_T_THOC, L_T_THOCD, L_T_THOCI,
+           L_T_THOCS, L_T_TFACT, L_T_TFAIT, L_T_THOCT.
+
+  REFRESH: L_T_TCALS_DDIC, L_T_THOL_DDIC, L_T_THOLU_DDIC,
+           L_T_THOLT_DDIC, L_T_TFACD_DDIC, L_T_TFACS_DDIC,
+           L_T_TFAIN_DDIC, L_T_THOC_DDIC, L_T_THOCD_DDIC,
+           L_T_THOCI_DDIC, L_T_THOCS_DDIC, L_T_TFACT_DDIC,
+           L_T_TFAIT_DDIC, L_T_THOCT_DDIC.
+
+* SL30032006 - internal table like ODS
+
+Select all 13 ODS and fill the internal tables in the FACTCAL structure accordingly
+
+Start with TFACD,TFACT,TFACS,TFAIN,TFAIT,
+SELECT 
+D..
+D…
+D…
+….
+FROM DODS into table : L_T_TFACD  
+WHERE IDENT IN FACDID. “Select-option
+
+Collect all HOCIDs in Field HOCID and select the Holiday Calendar tables 
+THOCI
+THOCT
+THOC -> Collect FTGID to select Public holidays
+THOCD
+THOCS
+
+Select Public holiday tables
+THOL
+THOLT
+THOLU
+
+* write trace
+  PERFORM TRACE_EXTRACTION USING: 'TCALS' L_T_TCALS, 'THOL'  L_T_THOL,
+                                  'THOLU' L_T_THOLU, 'THOLT' L_T_THOLT,
+                                  'TFACD' L_T_TFACD, 'TFACS' L_T_TFACS,
+                                  'TFAIN' L_T_TFAIN, 'THOC'  L_T_THOC,
+                                  'THOCD' L_T_THOCD, 'THOCI' L_T_THOCI,
+                                  'THOCS' L_T_THOCS, 'TFACT' L_T_TFACT,
+                                  'TFAIT' L_T_TFAIT, 'THOCT' L_T_THOCT.
+
+* lock tables not in simulation-Mode
+  IF P_UPDATE NE 'T'.
+    PERFORM ENQUEUE_TABLE USING: 'TCALS', 'THOL',  'THOLU', 'THOLT',
+                                 'TFACD', 'TFACS', 'TFAIN', 'THOC',
+                                 'THOCD', 'THOCI', 'THOCS', 'TFACT',
+                                 'TFAIT', 'THOCT'.
+  ENDIF.
+
+  IF P_UPDATE = 'N'.
+* Modus new setup: delete all table entries before inserting new ones
+    delete from thol  where FTGID ne ''.
+    delete from tholu where FTGID ne ''.
+    delete from tholt where FTGID ne ''.
+    delete from TFACD where IDENT ne ''.
+    delete from TFACS where IDENT ne ''.
+    delete from TFAIN where IDENT ne ''.
+    delete from THOC  where IDENT ne ''.
+    delete from THOCD where IDENT ne ''.
+    delete from THOCI where IDENT ne ''.
+    delete from THOCS where IDENT ne ''.
+    delete from TFACT where IDENT ne ''.
+    delete from TFAIT where IDENT ne ''.
+    delete from THOCT where IDENT ne ''.
+  ENDIF.
+
+  CHECK ( P_UPDATE = 'N' ) OR ( P_UPDATE = 'U' ).
+* update tables
+
+  IF NOT L_T_THOL[] IS INITIAL.
+    LOOP AT L_T_THOL INTO L_S_THOL.
+      MOVE-CORRESPONDING L_S_THOL TO L_S_THOL_DDIC.
+      APPEND L_S_THOL_DDIC TO L_T_THOL_DDIC.
+    ENDLOOP.
+    PERFORM UPDATE_TABLE USING 'THOL' L_T_THOL_DDIC.
+  ENDIF.
+
+  IF NOT L_T_THOLU[] IS INITIAL.
+    LOOP AT L_T_THOLU INTO L_S_THOLU.
+      MOVE-CORRESPONDING L_S_THOLU TO L_S_THOLU_DDIC.
+      APPEND L_S_THOLU_DDIC TO L_T_THOLU_DDIC.
+    ENDLOOP.
+    PERFORM UPDATE_TABLE USING 'THOLU' L_T_THOLU_DDIC.
+  ENDIF.
+
+  IF NOT L_T_THOLT[] IS INITIAL.
+    LOOP AT L_T_THOLT INTO L_S_THOLT.
+      MOVE-CORRESPONDING L_S_THOLT TO L_S_THOLT_DDIC.
+      APPEND L_S_THOLT_DDIC TO L_T_THOLT_DDIC.
+    ENDLOOP.
+    PERFORM UPDATE_TABLE USING 'THOLT' L_T_THOLT_DDIC.
+  ENDIF.
+
+  IF NOT L_T_TFACD[] IS INITIAL.
+    LOOP AT L_T_TFACD INTO L_S_TFACD.
+      MOVE-CORRESPONDING L_S_TFACD TO L_S_TFACD_DDIC.
+      APPEND L_S_TFACD_DDIC TO L_T_TFACD_DDIC.
+    ENDLOOP.
+    PERFORM UPDATE_TABLE USING 'TFACD' L_T_TFACD_DDIC.
+  ENDIF.
+
+  IF NOT L_T_TFACS[] IS INITIAL.
+    LOOP AT L_T_TFACS INTO L_S_TFACS.
+      MOVE-CORRESPONDING L_S_TFACS TO L_S_TFACS_DDIC.
+      APPEND L_S_TFACS_DDIC TO L_T_TFACS_DDIC.
+    ENDLOOP.
+    PERFORM UPDATE_TABLE USING 'TFACS' L_T_TFACS_DDIC.
+  ENDIF.
+
+  IF NOT L_T_TFAIN[] IS INITIAL.
+    LOOP AT L_T_TFAIN INTO L_S_TFAIN.
+      MOVE-CORRESPONDING L_S_TFAIN TO L_S_TFAIN_DDIC.
+      APPEND L_S_TFAIN_DDIC TO L_T_TFAIN_DDIC.
+    ENDLOOP.
+    PERFORM UPDATE_TABLE USING 'TFAIN' L_T_TFAIN_DDIC.
+  ENDIF.
+
+  IF NOT L_T_THOC[] IS INITIAL.
+    LOOP AT L_T_THOC INTO L_S_THOC.
+      MOVE-CORRESPONDING L_S_THOC TO L_S_THOC_DDIC.
+      APPEND L_S_THOC_DDIC TO L_T_THOC_DDIC.
+    ENDLOOP.
+    PERFORM UPDATE_TABLE USING 'THOC' L_T_THOC_DDIC.
+  ENDIF.
+
+  IF NOT L_T_THOCD[] IS INITIAL.
+    LOOP AT L_T_THOCD INTO L_S_THOCD.
+      MOVE-CORRESPONDING L_S_THOCD TO L_S_THOCD_DDIC.
+      APPEND L_S_THOCD_DDIC TO L_T_THOCD_DDIC.
+    ENDLOOP.
+    PERFORM UPDATE_TABLE USING 'THOCD' L_T_THOCD_DDIC.
+  ENDIF.
+
+  IF NOT L_T_THOCI[] IS INITIAL.
+    LOOP AT L_T_THOCI INTO L_S_THOCI.
+      MOVE-CORRESPONDING L_S_THOCI TO L_S_THOCI_DDIC.
+      APPEND L_S_THOCI_DDIC TO L_T_THOCI_DDIC.
+    ENDLOOP.
+    PERFORM UPDATE_TABLE USING 'THOCI' L_T_THOCI_DDIC.
+  ENDIF.
+
+  IF NOT L_T_THOCS[] IS INITIAL.
+    LOOP AT L_T_THOCS INTO L_S_THOCS.
+      MOVE-CORRESPONDING L_S_THOCS TO L_S_THOCS_DDIC.
+      APPEND L_S_THOCS_DDIC TO L_T_THOCS_DDIC.
+    ENDLOOP.
+    PERFORM UPDATE_TABLE USING 'THOCS' L_T_THOCS_DDIC.
+  ENDIF.
+
+  IF NOT L_T_TFACT[] IS INITIAL.
+    LOOP AT L_T_TFACT INTO L_S_TFACT.
+      MOVE-CORRESPONDING L_S_TFACT TO L_S_TFACT_DDIC.
+      APPEND L_S_TFACT_DDIC TO L_T_TFACT_DDIC.
+    ENDLOOP.
+    PERFORM UPDATE_TABLE USING 'TFACT' L_T_TFACT_DDIC.
+  ENDIF.
+
+  IF NOT L_T_TFAIT[] IS INITIAL.
+    LOOP AT L_T_TFAIT INTO L_S_TFAIT.
+      MOVE-CORRESPONDING L_S_TFAIT TO L_S_TFAIT_DDIC.
+      APPEND L_S_TFAIT_DDIC TO L_T_TFAIT_DDIC.
+    ENDLOOP.
+    PERFORM UPDATE_TABLE USING 'TFAIT' L_T_TFAIT_DDIC.
+  ENDIF.
+
+  IF NOT L_T_THOCT[] IS INITIAL.
+    LOOP AT L_T_THOCT INTO L_S_THOCT.
+      MOVE-CORRESPONDING L_S_THOCT TO L_S_THOCT_DDIC.
+      APPEND L_S_THOCT_DDIC TO L_T_THOCT_DDIC.
+    ENDLOOP.
+    PERFORM UPDATE_TABLE USING 'THOCT' L_T_THOCT_DDIC.
+  ENDIF.
+
+  COMMIT WORK.
+
+* recalc buffer size
+Submit RSSCALX1 and return.
+
+* refresh buffer
+  CALL 'CAL_LOAD_NEW'.
+  CALL 'CAL_SYNC'.
+
+*unlock tables
+  IF P_UPDATE NE 'T'.
+    PERFORM DEQUEUE_TABLE USING: 'TCALS', 'THOL',  'THOLU', 'THOLT',
+                                 'TFACD', 'TFACS', 'TFAIN', 'THOC',
+                                 'THOCD', 'THOCI', 'THOCS', 'TFACT',
+                                 'TFAIT', 'THOCT'.
+  ENDIF.
+ENDFORM.                               " GET_FACTCALE_TABLES
+
+
+
